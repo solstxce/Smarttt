@@ -159,7 +159,7 @@ void sendDataToServer(bool isRetry = false) {
     url += "\r\n\r\n";
     
     // Send data length
-    cmd = "AT+CIPSEND=";
+    String cmd = "AT+CIPSEND=";
     cmd += url.length();
     serialAlt.println(cmd);
     delay(100);
