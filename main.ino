@@ -6,7 +6,7 @@
 // WiFi credentials
 const char* ssid = "Madani";
 const char* password = "123456789";
-const char* serverIP = "35.244.13.36";
+const char* serverIP = "144.126.254.154";
 const int serverPort = 8085;
 
 // Pin definitions for Arduino Nano
@@ -27,7 +27,7 @@ bool lastButtonState = HIGH;  // Assuming pull-up resistor (button open = HIGH)
 unsigned long lastDebounceTime = 0;
 unsigned long debounceDelay = 50;  // Debounce time in milliseconds
 bool emergencyTriggered = false;
-unsigned long emergencyCooldown = 5000;  // 30 seconds cooldown between alerts
+unsigned long emergencyCooldown = 10000;  // 30 seconds cooldown between alerts
 unsigned long lastEmergencyTime = 0;
 
 // Objects
@@ -36,8 +36,8 @@ SoftwareSerial serialAlt(ESP_TX, ESP_RX); // We'll switch between GPS and ESP
 PulseSensorPlayground pulseSensor;  // Creates a PulseSensorPlayground object
 
 // Variables
-float latitude = 0;
-float longitude = 0;
+float latitude = 9.574687;
+float longitude = 77.679812;
 unsigned long lastReadTime = 0;
 const long readInterval = 1000;
 bool wifiConnected = false;
@@ -101,21 +101,40 @@ void setupESP8266() {
     wifiConnected = false;
 }
 
-void sendDataToServer() {
+void sendDataToServer(bool isRetry = false) {
     if (!wifiConnected) return;
     
     switchToESP();
     
-    String cmd = "AT+CIPSTART=\"TCP\",\"";
-    cmd += serverIP;
-    cmd += "\",";
-    cmd += serverPort;
-    serialAlt.println(cmd);
-    delay(1000);
-    
-    if (serialAlt.find("ERROR")) {
-        Serial.println("TCP Connection Error");
-        return;
+    const int maxRetries = 3;  // Maximum number of retry attempts
+    int currentRetry = 0;
+    bool sendSuccess = false;
+
+    while (!sendSuccess && currentRetry < maxRetries) {
+        String cmd = "AT+CIPSTART=\"TCP\",\"";
+        cmd += serverIP;
+        cmd += "\",";
+        cmd += serverPort;
+        serialAlt.println(cmd);
+        delay(500);
+        
+        if (serialAlt.find("ERROR")) {
+            Serial.print("TCP Connection Error. Attempt ");
+            Serial.print(currentRetry + 1);
+            Serial.print(" of ");
+            Serial.println(maxRetries);
+            currentRetry++;
+            
+            if (currentRetry < maxRetries) {
+                delay(1000 * currentRetry);  // Exponential backoff
+                continue;
+            } else {
+                Serial.println("Failed to establish TCP connection after all retries");
+                return;
+            }
+        } else {
+            sendSuccess = true;
+        }
     }
     
     // Prepare HTTP GET request
@@ -129,7 +148,10 @@ void sendDataToServer() {
     // Add emergency flag if triggered
     if (emergencyTriggered) {
         url += "&emergency=true";
-        emergencyTriggered = false;
+        // Only clear emergency flag if send is successful
+        if (!isRetry) {
+            emergencyTriggered = false;
+        }
     }
     
     url += " HTTP/1.1\r\nHost: ";
@@ -145,6 +167,17 @@ void sendDataToServer() {
     // Send data
     serialAlt.print(url);
     delay(1000);
+    
+    // Check if data was sent successfully
+    if (serialAlt.find("SEND OK")) {
+        Serial.println("Data sent successfully");
+        if (emergencyTriggered && isRetry) {
+            emergencyTriggered = false;
+        }
+    } else if (!isRetry) {
+        Serial.println("Failed to send data, retrying...");
+        sendDataToServer(true);  // Retry once
+    }
     
     clearSerialAlt();
 }
@@ -177,8 +210,8 @@ void checkEmergencyButton() {
                 emergencyTriggered = true;
                 lastEmergencyTime = millis();
                 
-                // Send emergency alert immediately
-                sendDataToServer();
+                // Send emergency alert immediately with retry capability
+                sendDataToServer(false);
             } else {
                 Serial.println("Emergency button in cooldown period");
             }
@@ -223,8 +256,7 @@ void setup() {
 void loop() {
     // Update heart rate using the library
     heartRate = pulseSensor.getBeatsPerMinute();
-    if (heartRate > 230) heartRate -= 160;
-    else if (heartRate <230) heartRate = 0;
+
     // Check emergency button
     checkEmergencyButton();
     
